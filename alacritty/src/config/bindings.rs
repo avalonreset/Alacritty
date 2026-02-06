@@ -118,6 +118,9 @@ pub enum Action {
     /// Paste contents of system clipboard.
     Paste,
 
+    /// Undo the last clipboard paste (falls back to sending Ctrl+Z when nothing can be undone).
+    Undo,
+
     /// Store current selection into clipboard.
     Copy,
 
@@ -571,6 +574,15 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
     let mut bindings = bindings!(
         KeyBinding;
         Enter, ModifiersState::ALT; Action::ToggleFullscreen;
+
+        // Windows users generally expect Ctrl+V to paste (like Windows Terminal and most apps).
+        // This intentionally diverges from the Ctrl+Shift+V convention used on other platforms.
+        "v",    ModifiersState::CONTROL, ~BindingMode::VI;                       Action::Paste;
+        "v",    ModifiersState::CONTROL, +BindingMode::VI, +BindingMode::SEARCH; Action::Paste;
+
+        // Terminal-level undo for clipboard pastes (falls back to sending Ctrl+Z).
+        "z",    ModifiersState::CONTROL, ~BindingMode::VI;                       Action::Undo;
+        "z",    ModifiersState::CONTROL, +BindingMode::VI, +BindingMode::SEARCH; Action::Undo;
     );
     bindings.extend(common_keybindings());
     bindings

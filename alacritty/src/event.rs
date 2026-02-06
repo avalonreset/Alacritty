@@ -655,10 +655,38 @@ impl Default for InlineSearchState {
     }
 }
 
+/// State for undoing the last clipboard paste.
+///
+/// This is intentionally limited in scope: it is **not** a full terminal undo system; it only
+/// tries to make "oops, I pasted a huge blob" recoverable without holding Backspace forever.
+#[derive(Default, Debug)]
+pub struct PasteUndoState {
+    pending_backspaces: Option<usize>,
+}
+
+impl PasteUndoState {
+    pub fn clear(&mut self) {
+        self.pending_backspaces = None;
+    }
+
+    pub fn set(&mut self, backspaces: usize) {
+        if backspaces == 0 {
+            self.pending_backspaces = None;
+        } else {
+            self.pending_backspaces = Some(backspaces);
+        }
+    }
+
+    pub fn take(&mut self) -> Option<usize> {
+        self.pending_backspaces.take()
+    }
+}
+
 pub struct ActionContext<'a, N, T> {
     pub notifier: &'a mut N,
     pub terminal: &'a mut Term<T>,
     pub clipboard: &'a mut Clipboard,
+    pub paste_undo: &'a mut PasteUndoState,
     pub mouse: &'a mut Mouse,
     pub touch: &'a mut TouchPurpose,
     pub modifiers: &'a mut Modifiers,
@@ -1362,6 +1390,11 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     /// Paste a text into the terminal.
     fn paste(&mut self, text: &str, bracketed: bool) {
+        // Only clipboard pastes (`bracketed=true`) participate in paste undo.
+        if !bracketed {
+            self.paste_undo.clear();
+        }
+
         if self.search_active() {
             for c in text.chars() {
                 self.search_input(c);
@@ -1379,13 +1412,17 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // paste end escape `\x1b[201~` and `\x03` since some shells incorrectly terminate
             // bracketed paste when they receive it.
             let filtered = text.replace(['\x1b', '\x03'], "");
+            let undo_len = filtered.chars().count();
             self.write_to_pty(filtered.into_bytes());
 
             self.write_to_pty(&b"\x1b[201~"[..]);
+
+            // Undo deletes the inserted content (not the bracket wrappers).
+            self.paste_undo.set(undo_len);
         } else {
             self.on_terminal_input_start();
 
-            let payload = if bracketed {
+            let (payload, undo_len) = if bracketed {
                 // In non-bracketed (ie: normal) mode, terminal applications cannot distinguish
                 // pasted data from keystrokes.
                 //
@@ -1394,14 +1431,20 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 // impossible task to solve in a general way), we'll just replace line breaks
                 // (windows and unix style) with a single carriage return (\r, which is what the
                 // Enter key produces).
-                text.replace("\r\n", "\r").replace('\n', "\r").into_bytes()
+                let payload = text.replace("\r\n", "\r").replace('\n', "\r");
+                let undo_len = payload.chars().count();
+                (payload.into_bytes(), undo_len)
             } else {
                 // When we explicitly disable bracketed paste don't manipulate with the input,
                 // so we pass user input as is.
-                text.to_owned().into_bytes()
+                (text.to_owned().into_bytes(), 0)
             };
 
             self.write_to_pty(payload);
+
+            if bracketed {
+                self.paste_undo.set(undo_len);
+            }
         }
     }
 
@@ -1487,6 +1530,29 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn clipboard_mut(&mut self) -> &mut Clipboard {
         self.clipboard
+    }
+
+    fn undo(&mut self) {
+        // If we have something to undo, emit backspaces, otherwise pass Ctrl+Z through to the PTY.
+        if let Some(backspaces) = self.paste_undo.take() {
+            self.on_terminal_input_start();
+
+            // DEL (0x7f) is what Alacritty sends for Backspace by default.
+            const CHUNK: usize = 4096;
+            let mut remaining = backspaces;
+            while remaining != 0 {
+                let n = remaining.min(CHUNK);
+                self.write_to_pty(vec![0x7f; n]);
+                remaining -= n;
+            }
+        } else {
+            self.on_terminal_input_start();
+            self.write_to_pty(vec![0x1a]);
+        }
+    }
+
+    fn clear_paste_undo(&mut self) {
+        self.paste_undo.clear();
     }
 
     fn scheduler_mut(&mut self) -> &mut Scheduler {

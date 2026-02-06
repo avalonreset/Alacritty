@@ -36,7 +36,8 @@ use crate::config::UiConfig;
 use crate::display::Display;
 use crate::display::window::Window;
 use crate::event::{
-    ActionContext, Event, EventProxy, InlineSearchState, Mouse, SearchState, TouchPurpose,
+    ActionContext, Event, EventProxy, InlineSearchState, Mouse, PasteUndoState, SearchState,
+    TouchPurpose,
 };
 #[cfg(unix)]
 use crate::logging::LOG_TARGET_IPC_CONFIG;
@@ -56,6 +57,7 @@ pub struct WindowContext {
     modifiers: Modifiers,
     inline_search_state: InlineSearchState,
     search_state: SearchState,
+    paste_undo: PasteUndoState,
     notifier: Notifier,
     mouse: Mouse,
     touch: TouchPurpose,
@@ -248,6 +250,7 @@ impl WindowContext {
             message_buffer: Default::default(),
             window_config: Default::default(),
             search_state: Default::default(),
+            paste_undo: Default::default(),
             event_queue: Default::default(),
             modifiers: Default::default(),
             occluded: Default::default(),
@@ -450,6 +453,7 @@ impl WindowContext {
             #[cfg(target_os = "macos")]
             event_loop,
             clipboard,
+            paste_undo: &mut self.paste_undo,
             scheduler,
         };
         let mut processor = input::Processor::new(context);

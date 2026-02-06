@@ -98,6 +98,9 @@ impl<T: EventListener, A: ActionContext<T>> Processor<T, A> {
             if !is_modifier_key {
                 self.ctx.on_terminal_input_start();
             }
+
+            // User typing after a paste should disable paste undo.
+            self.ctx.clear_paste_undo();
             self.ctx.write_to_pty(bytes);
         }
     }
