@@ -121,6 +121,9 @@ pub enum Action {
     /// Undo the last clipboard paste (falls back to sending Ctrl+Z when nothing can be undone).
     Undo,
 
+    /// Redo the last undone clipboard paste.
+    Redo,
+
     /// Store current selection into clipboard.
     Copy,
 
@@ -583,6 +586,15 @@ pub fn platform_key_bindings() -> Vec<KeyBinding> {
         // Terminal-level undo for clipboard pastes (falls back to sending Ctrl+Z).
         "z",    ModifiersState::CONTROL, ~BindingMode::VI;                       Action::Undo;
         "z",    ModifiersState::CONTROL, +BindingMode::VI, +BindingMode::SEARCH; Action::Undo;
+
+        // Redo the last undone paste.
+        "z",    ModifiersState::CONTROL | ModifiersState::SHIFT, ~BindingMode::VI;                       Action::Redo;
+        "z",    ModifiersState::CONTROL | ModifiersState::SHIFT, +BindingMode::VI, +BindingMode::SEARCH; Action::Redo;
+
+        // Single-press PageUp/PageDown scroll (only outside alt screen, so full-screen apps keep
+        // getting PageUp/PageDown).
+        PageUp,   ~BindingMode::ALT_SCREEN; Action::ScrollPageUp;
+        PageDown, ~BindingMode::ALT_SCREEN; Action::ScrollPageDown;
     );
     bindings.extend(common_keybindings());
     bindings

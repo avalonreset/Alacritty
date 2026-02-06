@@ -142,6 +142,9 @@ pub trait ActionContext<T: EventListener> {
     /// Undo the last clipboard paste (if supported by the context).
     fn undo(&mut self) {}
 
+    /// Redo the last undone clipboard paste (if supported by the context).
+    fn redo(&mut self) {}
+
     /// Clear any pending paste undo state.
     fn clear_paste_undo(&mut self) {}
     fn spawn_daemon<I, S>(&self, _program: &str, _args: I)
@@ -335,6 +338,7 @@ impl<T: EventListener> Execute<T> for Action {
                 ctx.paste(&text, true);
             },
             Action::Undo => ctx.undo(),
+            Action::Redo => ctx.redo(),
             Action::PasteSelection => {
                 let text = ctx.clipboard_mut().load(ClipboardType::Selection);
                 ctx.paste(&text, true);

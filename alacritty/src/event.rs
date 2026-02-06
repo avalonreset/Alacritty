@@ -61,7 +61,7 @@ use crate::input::{self, ActionContext as _, FONT_SIZE_STEP};
 #[cfg(unix)]
 use crate::ipc::{self, SocketReply};
 use crate::logging::{LOG_TARGET_CONFIG, LOG_TARGET_WINIT};
-use crate::message_bar::{Message, MessageBuffer};
+use crate::message_bar::{Message, MessageBuffer, MessageType};
 use crate::scheduler::{Scheduler, TimerId, Topic};
 use crate::window_context::WindowContext;
 
@@ -661,24 +661,46 @@ impl Default for InlineSearchState {
 /// tries to make "oops, I pasted a huge blob" recoverable without holding Backspace forever.
 #[derive(Default, Debug)]
 pub struct PasteUndoState {
-    pending_backspaces: Option<usize>,
+    record: Option<PasteUndoRecord>,
+    undone: bool,
+}
+
+#[derive(Debug)]
+struct PasteUndoRecord {
+    undo_backspaces: usize,
+    redo_bytes: Option<Vec<u8>>,
 }
 
 impl PasteUndoState {
     pub fn clear(&mut self) {
-        self.pending_backspaces = None;
+        self.record = None;
+        self.undone = false;
     }
 
-    pub fn set(&mut self, backspaces: usize) {
-        if backspaces == 0 {
-            self.pending_backspaces = None;
-        } else {
-            self.pending_backspaces = Some(backspaces);
+    pub fn record(&mut self, undo_backspaces: usize, redo_bytes: Option<Vec<u8>>) {
+        if undo_backspaces == 0 {
+            self.clear();
+            return;
         }
+
+        self.record = Some(PasteUndoRecord { undo_backspaces, redo_bytes });
+        self.undone = false;
     }
 
-    pub fn take(&mut self) -> Option<usize> {
-        self.pending_backspaces.take()
+    pub fn undo_backspaces(&self) -> Option<usize> {
+        self.record.as_ref().map(|r| r.undo_backspaces).filter(|_| !self.undone)
+    }
+
+    pub fn redo_bytes(&self) -> Option<&[u8]> {
+        self.record.as_ref().and_then(|r| r.redo_bytes.as_deref()).filter(|_| self.undone)
+    }
+
+    pub fn mark_undone(&mut self) {
+        self.undone = true;
+    }
+
+    pub fn mark_redone(&mut self) {
+        self.undone = false;
     }
 }
 
@@ -1390,21 +1412,23 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     /// Paste a text into the terminal.
     fn paste(&mut self, text: &str, bracketed: bool) {
+        const MAX_REDO_BYTES: usize = 8 * 1024 * 1024;
+
         // Only clipboard pastes (`bracketed=true`) participate in paste undo.
         if !bracketed {
             self.paste_undo.clear();
         }
 
         if self.search_active() {
+            self.paste_undo.clear();
             for c in text.chars() {
                 self.search_input(c);
             }
         } else if self.inline_search_state.char_pending {
+            self.paste_undo.clear();
             self.inline_search_input(text);
         } else if bracketed && self.terminal().mode().contains(TermMode::BRACKETED_PASTE) {
             self.on_terminal_input_start();
-
-            self.write_to_pty(&b"\x1b[200~"[..]);
 
             // Write filtered escape sequences.
             //
@@ -1413,12 +1437,18 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
             // bracketed paste when they receive it.
             let filtered = text.replace(['\x1b', '\x03'], "");
             let undo_len = filtered.chars().count();
-            self.write_to_pty(filtered.into_bytes());
 
-            self.write_to_pty(&b"\x1b[201~"[..]);
+            let filtered_bytes = filtered.into_bytes();
+            let mut bytes = Vec::with_capacity(filtered_bytes.len() + 12);
+            bytes.extend_from_slice(b"\x1b[200~");
+            bytes.extend_from_slice(&filtered_bytes);
+            bytes.extend_from_slice(b"\x1b[201~");
 
             // Undo deletes the inserted content (not the bracket wrappers).
-            self.paste_undo.set(undo_len);
+            let redo_bytes = (bytes.len() <= MAX_REDO_BYTES).then(|| bytes.clone());
+            self.paste_undo.record(undo_len, redo_bytes);
+
+            self.write_to_pty(bytes);
         } else {
             self.on_terminal_input_start();
 
@@ -1440,11 +1470,12 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 (text.to_owned().into_bytes(), 0)
             };
 
-            self.write_to_pty(payload);
-
             if bracketed {
-                self.paste_undo.set(undo_len);
+                let redo_bytes = (payload.len() <= MAX_REDO_BYTES).then(|| payload.clone());
+                self.paste_undo.record(undo_len, redo_bytes);
             }
+
+            self.write_to_pty(payload);
         }
     }
 
@@ -1534,7 +1565,7 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
 
     fn undo(&mut self) {
         // If we have something to undo, emit backspaces, otherwise pass Ctrl+Z through to the PTY.
-        if let Some(backspaces) = self.paste_undo.take() {
+        if let Some(backspaces) = self.paste_undo.undo_backspaces() {
             self.on_terminal_input_start();
 
             // DEL (0x7f) is what Alacritty sends for Backspace by default.
@@ -1545,9 +1576,29 @@ impl<'a, N: Notify + 'a, T: EventListener> input::ActionContext<T> for ActionCon
                 self.write_to_pty(vec![0x7f; n]);
                 remaining -= n;
             }
+
+            self.paste_undo.mark_undone();
         } else {
             self.on_terminal_input_start();
             self.write_to_pty(vec![0x1a]);
+        }
+    }
+
+    fn redo(&mut self) {
+        let redo_bytes = self.paste_undo.redo_bytes().map(|b| b.to_vec());
+        if let Some(bytes) = redo_bytes {
+            self.on_terminal_input_start();
+            self.write_to_pty(bytes);
+            self.paste_undo.mark_redone();
+        } else if self.paste_undo.record.is_some() {
+            // There is a record, but redo data wasn't stored (for example: huge paste).
+            self.message_buffer.push(Message::new(
+                "Nothing to redo (redo unavailable for this paste).".into(),
+                MessageType::Warning,
+            ));
+        } else {
+            self.message_buffer
+                .push(Message::new("Nothing to redo.".into(), MessageType::Warning));
         }
     }
 

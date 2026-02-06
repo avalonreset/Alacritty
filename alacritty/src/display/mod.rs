@@ -178,7 +178,7 @@ impl From<SizeInfo<f32>> for SizeInfo<u32> {
             padding_x: size_info.padding_x as u32,
             padding_y: size_info.padding_y as u32,
             screen_lines: size_info.screen_lines,
-            columns: size_info.screen_lines,
+            columns: size_info.columns,
         }
     }
 }
@@ -726,6 +726,12 @@ impl Display {
 
         // Check if dimensions have changed.
         if new_size != self.size_info {
+            // Pixel-size changes can shift the viewport/padding without affecting grid size. In
+            // that case, partial damage is no longer valid, since it refers to old pixel
+            // positions. Force a full redraw to avoid clipped/garbled output during resizes.
+            self.damage_tracker.frame().mark_fully_damaged();
+            self.damage_tracker.next_frame().mark_fully_damaged();
+
             // Queue renderer update.
             let renderer_update = self.pending_renderer_update.get_or_insert(Default::default());
             renderer_update.resize = true;
