@@ -24,3 +24,17 @@ all the colors of a standard terminal. The third enumerates the 24-bit colors.
 ./colors.sh
 ./24-bit-colors.sh
 ```
+
+## Third-Party License Notices
+
+When redistributing binaries, keep `THIRD_PARTY_NOTICES.html` up to date.
+
+```sh
+./generate-third-party-notices.sh
+```
+
+On Windows (PowerShell):
+
+```powershell
+.\generate-third-party-notices.ps1
+```

@@ -9,6 +9,7 @@
       <ui:WixUI Id="WixUI_Minimal" />
       <Feature Id="ProductFeature" Title="ConsoleApp" Level="1">
          <ComponentRef Id="AlacrittyExe" />
+         <ComponentRef Id="LegalFiles" />
          <ComponentRef Id="AlacrittyShortcut" />
          <ComponentRef Id="ModifyPathEnv" />
          <ComponentRef Id="ContextMenu" />
@@ -17,6 +18,12 @@
       <DirectoryRef Id="AlacrittyProgramFiles">
          <Component Id="AlacrittyExe">
             <File Id="AlacrittyExeFile" Source=".\target\release\alacritty.exe" Name="alacritty.exe" KeyPath="yes" />
+         </Component>
+         <!-- Keep license + third-party notices with the installation for redistribution compliance. -->
+         <Component Id="LegalFiles" Guid="93caa09b-7d50-4ccb-9b38-33abf31dd3e3">
+            <File Id="LicenseApacheFile" Source=".\LICENSE-APACHE" Name="LICENSE-APACHE" KeyPath="yes" />
+            <File Id="LicenseMITFile" Source=".\LICENSE-MIT" Name="LICENSE-MIT" />
+            <File Id="ThirdPartyNoticesFile" Source=".\THIRD_PARTY_NOTICES.html" Name="THIRD_PARTY_NOTICES.html" />
          </Component>
       </DirectoryRef>
       <DirectoryRef Id="AlacrittyProgramMenu">

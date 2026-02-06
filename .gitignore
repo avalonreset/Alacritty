@@ -1,2 +1,4 @@
 target
 dist
+cargo-metadata.json
+third_party_licenses.json

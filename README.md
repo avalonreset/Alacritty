@@ -5,6 +5,27 @@
 <h1 align="center">Alacritty - A fast, cross-platform, OpenGL terminal emulator</h1>
 
 <p align="center">
+  <strong>Unofficial fork</strong> of
+  <a href="https://github.com/alacritty/alacritty">alacritty/alacritty</a>
+  with a few Windows-focused QoL patches (image paste on <code>Ctrl+V</code>,
+  paste undo/redo on <code>Ctrl+Z</code>/<code>Ctrl+Shift+Z</code>, plus some
+  extra scrolling bindings).
+  <br/>
+  Not affiliated with the upstream Alacritty project.
+  <br/>
+  Distribution notes: see <code>FORK.md</code> and <code>LEGAL.md</code>.
+</p>
+
+<pre align="center">
+    _    _                 _ _ _   _
+   /_\\  | | __ _  ___ _ __(_) | |_| |_ _   _
+  //_\\\\ | |/ _` |/ __| '__| | | __| __| | | |
+ /  _  \\| | (_| | (__| |  | | | |_| |_| |_| |
+ \\_/ \\_\\|_|\\__,_|\\___|_|  |_|_|\\__|\\__|\\__, |
+                                       |___/
+</pre>
+
+<p align="center">
   <img alt="Alacritty - A fast, cross-platform, OpenGL terminal emulator"
        src="https://raw.githubusercontent.com/alacritty/alacritty/master/extra/promo/alacritty-readme.png">
 </p>
