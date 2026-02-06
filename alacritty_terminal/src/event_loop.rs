@@ -89,12 +89,21 @@ where
     ///
     /// Returns `false` when a shutdown message was received.
     fn drain_recv_channel(&mut self, state: &mut State) -> bool {
+        // Coalesce consecutive resizes into a single PTY resize. On Windows in particular,
+        // rapidly sending many resize events can cause applications (or ConPTY itself) to redraw
+        // erratically during interactive window resizing.
+        let mut pending_resize: Option<WindowSize> = None;
+
         while let Some(msg) = self.rx.recv() {
             match msg {
                 Msg::Input(input) => state.write_list.push_back(input),
-                Msg::Resize(window_size) => self.pty.on_resize(window_size),
+                Msg::Resize(window_size) => pending_resize = Some(window_size),
                 Msg::Shutdown => return false,
             }
+        }
+
+        if let Some(window_size) = pending_resize {
+            self.pty.on_resize(window_size);
         }
 
         true
