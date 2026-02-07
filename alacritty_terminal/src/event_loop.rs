@@ -9,7 +9,7 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use log::error;
 use polling::{Event as PollingEvent, Events, PollMode};
@@ -25,6 +25,12 @@ pub(crate) const READ_BUFFER_SIZE: usize = 0x10_0000;
 
 /// Max bytes to read from the PTY while the terminal is locked.
 const MAX_LOCKED_READ: usize = u16::MAX as usize;
+
+/// Debounce PTY resizes during interactive window resizing (Windows/ConPTY).
+///
+/// Rapid resize spam can cause applications to redraw/clear erratically.
+#[cfg(windows)]
+const RESIZE_DEBOUNCE: Duration = Duration::from_millis(150);
 
 /// Messages that may be sent to the `EventLoop`.
 #[derive(Debug)]
@@ -88,22 +94,31 @@ where
     /// Drain the channel.
     ///
     /// Returns `false` when a shutdown message was received.
-    fn drain_recv_channel(&mut self, state: &mut State) -> bool {
-        // Coalesce consecutive resizes into a single PTY resize. On Windows in particular,
-        // rapidly sending many resize events can cause applications (or ConPTY itself) to redraw
-        // erratically during interactive window resizing.
-        let mut pending_resize: Option<WindowSize> = None;
-
+    fn drain_recv_channel(
+        &mut self,
+        state: &mut State,
+        pending_resize: &mut Option<WindowSize>,
+        resize_deadline: &mut Option<Instant>,
+    ) -> bool {
         while let Some(msg) = self.rx.recv() {
             match msg {
                 Msg::Input(input) => state.write_list.push_back(input),
-                Msg::Resize(window_size) => pending_resize = Some(window_size),
+                Msg::Resize(window_size) => {
+                    *pending_resize = Some(window_size);
+
+                    #[cfg(windows)]
+                    {
+                        *resize_deadline = Some(Instant::now() + RESIZE_DEBOUNCE);
+                    }
+
+                    #[cfg(not(windows))]
+                    {
+                        let _ = resize_deadline;
+                        self.pty.on_resize(window_size);
+                    }
+                },
                 Msg::Shutdown => return false,
             }
-        }
-
-        if let Some(window_size) = pending_resize {
-            self.pty.on_resize(window_size);
         }
 
         true
@@ -216,6 +231,10 @@ where
             let mut state = State::default();
             let mut buf = [0u8; READ_BUFFER_SIZE];
 
+            // Debounced PTY resize state (Windows).
+            let mut pending_resize: Option<WindowSize> = None;
+            let mut resize_deadline: Option<Instant> = None;
+
             let poll_opts = PollMode::Level;
             let mut interest = PollingEvent::readable(0);
 
@@ -236,8 +255,17 @@ where
             'event_loop: loop {
                 // Wakeup the event loop when a synchronized update timeout was reached.
                 let handler = state.parser.sync_timeout();
-                let timeout =
+                let sync_timeout =
                     handler.sync_timeout().map(|st| st.saturating_duration_since(Instant::now()));
+
+                // Also wake up when a debounced resize is due.
+                let resize_timeout = resize_deadline.map(|dl| dl.saturating_duration_since(Instant::now()));
+                let timeout = match (sync_timeout, resize_timeout) {
+                    (Some(a), Some(b)) => Some(a.min(b)),
+                    (Some(a), None) => Some(a),
+                    (None, Some(b)) => Some(b),
+                    (None, None) => None,
+                };
 
                 events.clear();
                 if let Err(err) = self.poll.wait(&mut events, timeout) {
@@ -252,14 +280,32 @@ where
 
                 // Handle synchronized update timeout.
                 if events.is_empty() && self.rx.peek().is_none() {
+                    // Apply debounced resize on timeout.
+                    #[cfg(windows)]
+                    if pending_resize.is_some()
+                        && resize_deadline.is_some_and(|dl| dl <= Instant::now())
+                    {
+                        self.pty.on_resize(pending_resize.take().unwrap());
+                        resize_deadline = None;
+                        continue;
+                    }
+
                     state.parser.stop_sync(&mut *self.terminal.lock());
                     self.event_proxy.send_event(Event::Wakeup);
                     continue;
                 }
 
                 // Handle channel events, if there are any.
-                if !self.drain_recv_channel(&mut state) {
+                if !self.drain_recv_channel(&mut state, &mut pending_resize, &mut resize_deadline) {
                     break;
+                }
+
+                // Apply debounced resize once we've been idle long enough.
+                #[cfg(windows)]
+                if pending_resize.is_some() && resize_deadline.is_some_and(|dl| dl <= Instant::now())
+                {
+                    self.pty.on_resize(pending_resize.take().unwrap());
+                    resize_deadline = None;
                 }
 
                 for event in events.iter() {
