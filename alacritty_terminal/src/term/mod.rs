@@ -2955,7 +2955,10 @@ mod tests {
         size.screen_lines = 5;
         term.resize(size);
 
+        #[cfg(not(windows))]
         assert_eq!(term.history_size(), 15);
+        #[cfg(windows)]
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(4), Column(0)));
     }
 
@@ -2981,7 +2984,10 @@ mod tests {
         // Leave alt screen.
         term.unset_private_mode(NamedPrivateMode::SwapScreenAndSetRestoreCursor.into());
 
+        #[cfg(not(windows))]
         assert_eq!(term.history_size(), 15);
+        #[cfg(windows)]
+        assert_eq!(term.history_size(), 10);
         assert_eq!(term.grid.cursor.point, Point::new(Line(4), Column(0)));
     }
 

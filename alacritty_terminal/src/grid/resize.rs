@@ -80,17 +80,42 @@ impl<T: GridCell + Default + PartialEq> Grid<T> {
         T: ResetDiscriminant<D>,
         D: PartialEq,
     {
-        // Scroll up to keep content inside the window.
-        let required_scrolling = (self.cursor.point.line.0 as usize + 1).saturating_sub(target);
-        if required_scrolling > 0 {
-            self.scroll_up(&(Line(0)..Line(self.lines as i32)), required_scrolling);
+        // Clamp cursors to the new viewport size.
+        //
+        // NOTE: Historically Alacritty would "scroll up" during interactive vertical resizes to
+        // keep the cursor pinned to the bottom. On Windows this can feel like a "black curtain"
+        // eating recent output while dragging the window edge since each intermediate size change
+        // introduces new blank lines at the bottom.
+        //
+        // Clamping the cursor avoids modifying the viewport contents during resize, improving
+        // perceived stability while resizing height.
+        #[cfg(windows)]
+        {
+            let bottom = Line(target as i32 - 1);
+            if self.cursor.point.line > bottom {
+                self.cursor.point.line = bottom;
+            }
 
-            // Clamp cursors to the new viewport size.
-            self.cursor.point.line = min(self.cursor.point.line, Line(target as i32 - 1));
+            if self.saved_cursor.point.line > bottom {
+                self.saved_cursor.point.line = bottom;
+            }
         }
 
-        // Clamp saved cursor, since only primary cursor is scrolled into viewport.
-        self.saved_cursor.point.line = min(self.saved_cursor.point.line, Line(target as i32 - 1));
+        #[cfg(not(windows))]
+        {
+            // Scroll up to keep content inside the window.
+            let required_scrolling = (self.cursor.point.line.0 as usize + 1).saturating_sub(target);
+            if required_scrolling > 0 {
+                self.scroll_up(&(Line(0)..Line(self.lines as i32)), required_scrolling);
+
+                // Clamp cursors to the new viewport size.
+                self.cursor.point.line = min(self.cursor.point.line, Line(target as i32 - 1));
+            }
+
+            // Clamp saved cursor, since only primary cursor is scrolled into viewport.
+            self.saved_cursor.point.line =
+                min(self.saved_cursor.point.line, Line(target as i32 - 1));
+        }
 
         self.raw.rotate((self.lines - target) as isize);
         self.raw.shrink_visible_lines(target);
